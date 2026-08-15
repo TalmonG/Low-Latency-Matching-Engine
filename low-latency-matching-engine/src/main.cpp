@@ -10,7 +10,10 @@
 #include <mutex>
 #include <map>
 #include <list>
+#include <chrono>
 using namespace std;
+
+auto startTime = chrono::high_resolution_clock::now();
 
 struct Order
 {
@@ -31,27 +34,35 @@ public:
 mutex bufferMutex;
 queue<Order> networkBuffer;
 map<float, map<time_t, list<Order>>> sellOrdersMap; // ask/sell
-map<float, map<time_t, list<Order>>> buyOrdersMap; // bid/buy
+map<float, map<time_t, list<Order>>, greater<float>> buyOrdersMap; // bid/buy
+
+uint64_t totalOrders = 0;
+uint64_t totalTrades = 0;
+
+
 
 void DataSender()
 {
 	int orderId = 0;
 	while (true)
 	{
-		// send at random
-		time_t timestamp = time(&timestamp);
-		bool isSideBuy = (rand() % 2 == 0);
-		bool isTypeLimit = (rand() % 2 == 0);
-		float price = round(248.0f + (float(rand()) / RAND_MAX) * (251.0f - 248.0f));
-		int quantity = (rand() % 999) + 1; // 1 to 1000
-
-		// create packet
-		Order newOrder = { orderId++, timestamp, isSideBuy, isTypeLimit, price, quantity };
-
-		// send packet
+		if (networkBuffer.size() < 10000000)
 		{
-			lock_guard<mutex> lock(bufferMutex);
-			networkBuffer.push(newOrder);
+			// send at random
+			time_t timestamp = time(&timestamp);
+			bool isSideBuy = (rand() % 2 == 0);
+			bool isTypeLimit = (rand() % 2 == 0);
+			float price = round(248.0f + (float(rand()) / RAND_MAX) * (251.0f - 248.0f));
+			int quantity = (rand() % 999) + 1; // 1 to 1000
+
+			// create packet
+			Order newOrder = { orderId++, timestamp, isSideBuy, isTypeLimit, price, quantity };
+
+			// send packet
+			{
+				lock_guard<mutex> lock(bufferMutex);
+				networkBuffer.push(newOrder);
+			}
 		}
 	}
 }
@@ -70,6 +81,7 @@ void DataReceiver()
 				incomingPacket = networkBuffer.front();
 				networkBuffer.pop();
 				hasData = true;
+				totalOrders++;
 			}
 		}
 
@@ -93,14 +105,25 @@ void DataReceiver()
 						{
 							// lowest price at oldest order
 							sellOrdersMap.begin()->second.begin()->second.remove(tempOrder);
-							return;
+							totalTrades++;
+
+							// cleanup
+							if (sellOrdersMap.begin()->second.begin()->second.empty())
+							{
+								sellOrdersMap.begin()->second.erase(sellOrdersMap.begin()->second.begin());
+
+								// erase empty price map
+								if (sellOrdersMap.begin()->second.empty())
+								{
+									sellOrdersMap.erase(sellOrdersMap.begin());
+								}
+							}
 						}
 					}
 					else
 					{
 						// store incoming packet to buyOrdersMap
 						buyOrdersMap[incomingPacket.price][incomingPacket.timestamp].push_back(incomingPacket);
-						return;
 					}
 				}
 				else // they want to sell
@@ -114,13 +137,25 @@ void DataReceiver()
 						{
 							// lowest price at oldest order
 							buyOrdersMap.begin()->second.begin()->second.remove(tempOrder);
-							break;
+							totalTrades++;
+
+							// cleanup
+							if (buyOrdersMap.begin()->second.begin()->second.empty())
+							{
+								buyOrdersMap.begin()->second.erase(buyOrdersMap.begin()->second.begin());
+
+								// erase empty price map
+								if (buyOrdersMap.begin()->second.empty())
+								{
+									buyOrdersMap.erase(buyOrdersMap.begin());
+								}
+							}
+
 						}
 					}
 					else // store incoming packet to sellOrdersMap
 					{
 						sellOrdersMap[incomingPacket.price][incomingPacket.timestamp].push_back(incomingPacket);
-						break;
 					}
 				}
 			}
@@ -130,21 +165,32 @@ void DataReceiver()
 
 void Display()
 {
-	cout << "\033======================" << endl;
-	cout << "Orders Processed: " << 19000000 << endl;
-	cout << "Trades Executed: " << 1500000 << endl;
-	cout << "Current Throughput (goal 1000/s): " << 1300000 << "orders/sec" << endl;
-	cout << "Average Latency: " << 9 << "ns" << endl;
-	cout << "======================" << endl;
-	cout << "Press Enter To Stop" << endl;
+	auto currentTime = chrono::high_resolution_clock::now();
+	double seconds = chrono::duration<double>(currentTime - startTime).count();
+	int throughput = (seconds > 0) ? (totalOrders / seconds) : 0;
 
-	cin.get();
-	cout << "Press Enter To Exit" << endl;
-	cin.get();
+	size_t currentQueueSize = 0;
+	{
+		lock_guard<mutex> lock(bufferMutex);
+		currentQueueSize = networkBuffer.size();
+	}
+
+	stringstream ss;
+	ss << "\033[H"
+		<< "======================\033[K\n"
+		<< "Orders Processed: " << totalOrders << "\033[K\n"
+		<< "Trades Executed: " << totalTrades << "\033[K\n"
+		<< "Current Throughput: " << throughput << " orders/sec\033[K\n"
+		<< "Average Latency: coming soon ns\033[K\n"
+		<< "Total Queued Orders: " << currentQueueSize << "\033[K\n"
+		<< "======================\033[K\n"
+		<< "Press 'CTRL + C' To Stop\033[K\n";
+	cout << ss.str() << flush;
 }
 
 int main()
 {
+	cout << "\033[?25l";
 	cout << "Welcome to my Low Latency Matching Engine. Press 'Enter' to begin simulating incoming orders and handling of orders." << endl;
 	cin.get();
 
@@ -153,6 +199,11 @@ int main()
 	// create thread for sender
 	thread sender(DataSender);
 
-	Display();
+
+	while (true)
+	{
+		Display();
+		this_thread::sleep_for(chrono::seconds(1));
+	}
 	return 0;
 }

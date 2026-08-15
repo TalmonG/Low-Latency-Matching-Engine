@@ -1,2 +1,3 @@
 ﻿  main.cpp
+C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(170,17): warning C4244: 'initializing': conversion from 'double' to 'int', possible loss of data
   low-latency-matching-engine.vcxproj -> C:\Users\Talmon\Desktop\low-latency-matching-engine\x64\Debug\low-latency-matching-engine.exe
