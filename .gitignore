@@ -30,3 +30,25 @@
 *.exe
 *.out
 *.app
+
+# Visual Studio & IDEs
+.vs/
+.vscode/
+*.ipch
+*.db
+*.opendb
+*.suo
+*.user
+*.userosv
+*.sln.docstates
+
+# Build Directories & Artifacts
+[Xx]64/
+[Xx]86/
+[Dd]ebug/
+[Rr]elease/
+build/
+out/
+*.pdb
+*.ilk
+*.idb

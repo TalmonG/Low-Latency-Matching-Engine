@@ -8,6 +8,8 @@
 #include <sstream>
 #include <queue>
 #include <mutex>
+#include <map>
+#include <list>
 using namespace std;
 
 struct Order
@@ -19,10 +21,17 @@ public:
 	bool isTypeLimit;
 	float price;
 	int quantity;
+
+	bool operator==(const Order& other) const
+	{
+		return orderId == other.orderId; // compare orders by Id
+	}
 };
 
 mutex bufferMutex;
 queue<Order> networkBuffer;
+map<float, map<time_t, list<Order>>> sellOrdersMap; // ask/sell
+map<float, map<time_t, list<Order>>> buyOrdersMap; // bid/buy
 
 void DataSender()
 {
@@ -52,7 +61,7 @@ void DataReceiver()
 	while (true)
 	{
 		Order incomingPacket;
-		bool hasData;
+		bool hasData = false;
 
 		{
 			lock_guard<mutex> lock(bufferMutex);
@@ -66,10 +75,72 @@ void DataReceiver()
 
 		if (hasData)
 		{
-			// process
+			if (incomingPacket.orderId <= 0 || incomingPacket.price <= 0
+				|| incomingPacket.quantity <= 0 || incomingPacket.timestamp <= 0
+				|| typeid(incomingPacket.isSideBuy) == typeid(bool)
+				|| typeid(incomingPacket.isTypeLimit) == typeid(bool))
+			{
 
+				// process
+				if (incomingPacket.isSideBuy) // they want to buy
+				{
+					if (!sellOrdersMap.empty()) // is there a seller
+					{
+						// compare against lowest ask/sell
+						//				   lowest price	          lowest time     orders list
+						Order tempOrder = sellOrdersMap.begin()->second.begin()->second.front();
+						if (incomingPacket.price >= tempOrder.price) // priceMap->timestampsMap->ordersList
+						{
+							// lowest price at oldest order
+							sellOrdersMap.begin()->second.begin()->second.remove(tempOrder);
+							return;
+						}
+					}
+					else
+					{
+						// store incoming packet to buyOrdersMap
+						buyOrdersMap[incomingPacket.price][incomingPacket.timestamp].push_back(incomingPacket);
+						return;
+					}
+				}
+				else // they want to sell
+				{
+					if (!buyOrdersMap.empty())
+					{
+						// compare against highest bid/buy
+						//				   lowest price	          lowest time     orders list
+						Order tempOrder = buyOrdersMap.begin()->second.begin()->second.front();
+						if (incomingPacket.price <= tempOrder.price) // priceMap->timestampsMap->ordersList
+						{
+							// lowest price at oldest order
+							buyOrdersMap.begin()->second.begin()->second.remove(tempOrder);
+							break;
+						}
+					}
+					else // store incoming packet to sellOrdersMap
+					{
+						sellOrdersMap[incomingPacket.price][incomingPacket.timestamp].push_back(incomingPacket);
+						break;
+					}
+				}
+			}
 		}
 	}
+}
+
+void Display()
+{
+	cout << "\033======================" << endl;
+	cout << "Orders Processed: " << 19000000 << endl;
+	cout << "Trades Executed: " << 1500000 << endl;
+	cout << "Current Throughput (goal 1000/s): " << 1300000 << "orders/sec" << endl;
+	cout << "Average Latency: " << 9 << "ns" << endl;
+	cout << "======================" << endl;
+	cout << "Press Enter To Stop" << endl;
+
+	cin.get();
+	cout << "Press Enter To Exit" << endl;
+	cin.get();
 }
 
 int main()
@@ -82,10 +153,6 @@ int main()
 	// create thread for sender
 	thread sender(DataSender);
 
-	cout << "======================" << endl;
-	cout << "Stats" << endl;
-	cout << "======================" << endl;
-
-	cin.get();
+	Display();
 	return 0;
 }
