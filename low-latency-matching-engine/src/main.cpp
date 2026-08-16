@@ -1,7 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <thread>
-#include <ctime>
+//#include <ctime>
 #include <cstdlib>
 #include <vector>
 #include <string>
@@ -15,15 +15,27 @@ using namespace std;
 
 auto startTime = chrono::high_resolution_clock::now();
 
+enum class Side : uint8_t {
+	NONE,
+	BUY,
+	SELL
+};
+
+enum class Type : uint8_t {
+	NONE,
+	LIMIT,
+	MARKET
+};
+
 struct Order
 {
 public:
-	int orderId;
-	time_t timestamp;
-	bool isSideBuy;
-	bool isTypeLimit;
-	float price;
-	int quantity;
+	uint64_t orderId = 0;
+	uint64_t timestamp = 0;
+	enum Side side = Side::NONE;
+	enum Type type = Type::NONE;
+	uint32_t price = 0;
+	uint64_t quantity = 0;
 
 	bool operator==(const Order& other) const
 	{
@@ -33,8 +45,8 @@ public:
 
 mutex bufferMutex;
 queue<Order> networkBuffer;
-map<float, map<time_t, list<Order>>> sellOrdersMap; // ask/sell
-map<float, map<time_t, list<Order>>, greater<float>> buyOrdersMap; // bid/buy
+map<uint64_t, list<Order>> sellOrdersMap; // ask/sell
+map<uint64_t, list<Order>, greater<uint64_t>> buyOrdersMap; // bid/buy
 
 uint64_t totalOrders = 0;
 uint64_t totalTrades = 0;
@@ -43,20 +55,20 @@ uint64_t totalTrades = 0;
 
 void DataSender()
 {
-	int orderId = 0;
+	int orderId = 1;
 	while (true)
 	{
 		if (networkBuffer.size() < 10000000)
 		{
 			// send at random
-			time_t timestamp = time(&timestamp);
-			bool isSideBuy = (rand() % 2 == 0);
-			bool isTypeLimit = (rand() % 2 == 0);
-			float price = round(248.0f + (float(rand()) / RAND_MAX) * (251.0f - 248.0f));
-			int quantity = (rand() % 999) + 1; // 1 to 1000
+			uint64_t timestamp = chrono::duration_cast<chrono::nanoseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
+			Side side = (rand() % 2 == 0) ? Side::BUY : Side::SELL;
+			Type type = (rand() % 2 == 0) ? Type::LIMIT : Type::MARKET;
+			uint64_t price = round(24800 + (uint64_t(rand()) / RAND_MAX) * (25100 - 24800));
+			uint64_t quantity = (rand() % 999) + 1; // 1 to 1000
 
 			// create packet
-			Order newOrder = { orderId++, timestamp, isSideBuy, isTypeLimit, price, quantity };
+			Order newOrder = { orderId++, timestamp, side, type, price, quantity };
 
 			// send packet
 			{
@@ -87,75 +99,112 @@ void DataReceiver()
 
 		if (hasData)
 		{
-			if (incomingPacket.orderId <= 0 || incomingPacket.price <= 0
-				|| incomingPacket.quantity <= 0 || incomingPacket.timestamp <= 0
-				|| typeid(incomingPacket.isSideBuy) == typeid(bool)
-				|| typeid(incomingPacket.isTypeLimit) == typeid(bool))
+			if (incomingPacket.orderId > 0 && incomingPacket.price > 0
+				&& incomingPacket.quantity > 0 && incomingPacket.timestamp > 0
+				&& incomingPacket.side != Side::NONE
+				&& incomingPacket.type != Type::NONE)
 			{
-
 				// process
-				if (incomingPacket.isSideBuy) // they want to buy
+				if (incomingPacket.side == Side::BUY) // they want to buy
 				{
-					if (!sellOrdersMap.empty()) // is there a seller
+					if (incomingPacket.type == Type::LIMIT)
 					{
-						// compare against lowest ask/sell
-						//				   lowest price	          lowest time     orders list
-						Order tempOrder = sellOrdersMap.begin()->second.begin()->second.front();
-						if (incomingPacket.price >= tempOrder.price) // priceMap->timestampsMap->ordersList
+						if (!sellOrdersMap.empty()) // is there a seller
 						{
-							// lowest price at oldest order
-							sellOrdersMap.begin()->second.begin()->second.remove(tempOrder);
-							totalTrades++;
-
-							// cleanup
-							if (sellOrdersMap.begin()->second.begin()->second.empty())
+							if (incomingPacket.price >= sellOrdersMap.begin()->second.front().price) // priceMap->ordersList
 							{
-								sellOrdersMap.begin()->second.erase(sellOrdersMap.begin()->second.begin());
+								// lowest price at oldest order
+								sellOrdersMap.begin()->second.pop_front(); // TODO: should lock on this
+								totalTrades++;
 
-								// erase empty price map
+								// cleanup
 								if (sellOrdersMap.begin()->second.empty())
 								{
 									sellOrdersMap.erase(sellOrdersMap.begin());
 								}
 							}
+							else
+							{
+								// store incoming packet to buyOrdersMap
+								buyOrdersMap[incomingPacket.price].push_back(incomingPacket);
+							}
+						}
+						else
+						{
+							// store incoming packet to buyOrdersMap
+							buyOrdersMap[incomingPacket.price].push_back(incomingPacket);
 						}
 					}
-					else
+					else // market type
 					{
-						// store incoming packet to buyOrdersMap
-						buyOrdersMap[incomingPacket.price][incomingPacket.timestamp].push_back(incomingPacket);
-					}
-				}
-				else // they want to sell
-				{
-					if (!buyOrdersMap.empty())
-					{
-						// compare against highest bid/buy
-						//				   lowest price	          lowest time     orders list
-						Order tempOrder = buyOrdersMap.begin()->second.begin()->second.front();
-						if (incomingPacket.price <= tempOrder.price) // priceMap->timestampsMap->ordersList
+						if (!sellOrdersMap.empty()) // is there a seller
 						{
 							// lowest price at oldest order
-							buyOrdersMap.begin()->second.begin()->second.remove(tempOrder);
+							sellOrdersMap.begin()->second.pop_front(); // TODO: should lock on this
 							totalTrades++;
 
 							// cleanup
-							if (buyOrdersMap.begin()->second.begin()->second.empty())
+							if (sellOrdersMap.begin()->second.empty())
 							{
-								buyOrdersMap.begin()->second.erase(buyOrdersMap.begin()->second.begin());
+								sellOrdersMap.erase(sellOrdersMap.begin());
+							}
+						}
+						else
+						{
+							// cancel order
+						}
+					}
+				}
+				else if (incomingPacket.side == Side::SELL) // they want to sell
+				{
+					if (incomingPacket.type == Type::LIMIT)
+					{
+						if (!buyOrdersMap.empty())
+						{
+							// compare against highest bid/buy
+							//				               lowest price	       orders list
+							if (incomingPacket.price <= buyOrdersMap.begin()->second.front().price) // priceMap->ordersList
+							{
+								// lowest price at oldest order
+								buyOrdersMap.begin()->second.pop_front();
+								totalTrades++;
 
-								// erase empty price map
+								// cleanup
 								if (buyOrdersMap.begin()->second.empty())
 								{
 									buyOrdersMap.erase(buyOrdersMap.begin());
 								}
 							}
-
+							else
+							{
+								// store incoming packet to buyOrdersMap
+								sellOrdersMap[incomingPacket.price].push_back(incomingPacket);
+							}
+						}
+						else
+						{
+							// store incoming packet to buyOrdersMap
+							sellOrdersMap[incomingPacket.price].push_back(incomingPacket);
 						}
 					}
-					else // store incoming packet to sellOrdersMap
+					else // market type
 					{
-						sellOrdersMap[incomingPacket.price][incomingPacket.timestamp].push_back(incomingPacket);
+						if (!buyOrdersMap.empty())
+						{
+							// lowest price at oldest order
+							buyOrdersMap.begin()->second.pop_front();
+							totalTrades++;
+
+							// cleanup
+							if (buyOrdersMap.begin()->second.empty())
+							{
+								buyOrdersMap.erase(buyOrdersMap.begin());
+							}
+						}
+						else
+						{
+							// cancel order
+						}
 					}
 				}
 			}
@@ -179,7 +228,7 @@ void Display()
 	ss << "\033[H"
 		<< "======================\033[K\n"
 		<< "Orders Processed: " << totalOrders << "\033[K\n"
-		<< "Trades Executed: " << totalTrades << "\033[K\n"
+		<< "Trades Executed:  " << totalTrades << "\033[K\n"
 		<< "Current Throughput: " << throughput << " orders/sec\033[K\n"
 		<< "Average Latency: coming soon ns\033[K\n"
 		<< "Total Queued Orders: " << currentQueueSize << "\033[K\n"
