@@ -8,9 +8,9 @@
 #include <sstream>
 #include <queue>
 #include <mutex>
-#include <map>
-#include <list>
 #include <chrono>
+#include <atomic>
+#include <algorithm>
 using namespace std;
 
 auto startTime = chrono::high_resolution_clock::now();
@@ -45,12 +45,13 @@ public:
 
 mutex bufferMutex;
 queue<Order> networkBuffer;
-map<uint64_t, list<Order>> sellOrdersMap; // ask/sell
-map<uint64_t, list<Order>, greater<uint64_t>> buyOrdersMap; // bid/buy
 
-uint64_t totalOrders = 0;
-uint64_t totalTrades = 0;
-uint64_t totalLatency = 0;
+vector<Order> sellOrders; // ask/sell 
+vector<Order> buyOrders;  // bid/buy 
+
+atomic<uint64_t> totalOrders{ 0 };
+atomic<uint64_t> totalTrades{ 0 };
+atomic<uint64_t> totalLatency{ 0 };
 
 void DataSender()
 {
@@ -131,60 +132,49 @@ void DataReceiver()
 				{
 					if (incomingPacket.type == Type::LIMIT)
 					{
-						while (!sellOrdersMap.empty() && incomingPacket.quantity > 0
-							&& incomingPacket.price >= sellOrdersMap.begin()->first)
+						while (!sellOrders.empty() && incomingPacket.quantity > 0
+							&& incomingPacket.price >= sellOrders.back().price)
 						{
-							Order oldestOrder = sellOrdersMap.begin()->second.front();
-							uint64_t subQuantity = min(sellOrdersMap.begin()->second.front().quantity, incomingPacket.quantity);
+							uint64_t subQuantity = min(sellOrders.back().quantity, incomingPacket.quantity);
 
-							sellOrdersMap.begin()->second.front().quantity -= subQuantity;
+							sellOrders.back().quantity -= subQuantity;
 							incomingPacket.quantity -= subQuantity;
+							totalTrades++;
 
-							if (sellOrdersMap.begin()->second.front().quantity == 0)
+							if (sellOrders.back().quantity == 0)
 							{
-								sellOrdersMap.begin()->second.pop_front();
-
-								// cleanup
-								if (sellOrdersMap.begin()->second.empty())
-								{
-									sellOrdersMap.erase(sellOrdersMap.begin());
-								}
-
-								if (incomingPacket.quantity > 0)
-								{
-									// store incoming packet to buyOrdersMap
-									buyOrdersMap[incomingPacket.price].push_back(incomingPacket);
-								}
+								sellOrders.pop_back();
 							}
-							else
-							{
-								// store incoming packet to buyOrdersMap
-								buyOrdersMap[incomingPacket.price].push_back(incomingPacket);
-							}
+						}
 
-							if (!sellOrdersMap.empty()) // is there a seller
-							{
-
-							}
-							else
-							{
-								// store incoming packet to buyOrdersMap
-								buyOrdersMap[incomingPacket.price].push_back(incomingPacket);
-							}
+						if (incomingPacket.quantity > 0)
+						{
+							// store incoming packet to buyOrders
+							auto it = lower_bound(buyOrders.begin(), buyOrders.end(), incomingPacket,
+								[](const Order& a, const Order& b) {
+									if (a.price != b.price) return a.price < b.price;
+									return a.timestamp > b.timestamp; // oldest timestamp stays at back
+								});
+							buyOrders.insert(it, incomingPacket);
 						}
 					}
 					else // market type
 					{
-						if (!sellOrdersMap.empty()) // is there a seller
+						if (!sellOrders.empty()) // is there a seller
 						{
-							// lowest price at oldest order
-							sellOrdersMap.begin()->second.pop_front();
-							totalTrades++;
-
-							// cleanup
-							if (sellOrdersMap.begin()->second.empty())
+							while (!sellOrders.empty() && incomingPacket.quantity > 0)
 							{
-								sellOrdersMap.erase(sellOrdersMap.begin());
+								// lowest price at oldest order
+								uint64_t subQuantity = min(sellOrders.back().quantity, incomingPacket.quantity);
+
+								sellOrders.back().quantity -= subQuantity;
+								incomingPacket.quantity -= subQuantity;
+								totalTrades++;
+
+								if (sellOrders.back().quantity == 0)
+								{
+									sellOrders.pop_back();
+								}
 							}
 						}
 						else
@@ -197,46 +187,52 @@ void DataReceiver()
 				{
 					if (incomingPacket.type == Type::LIMIT)
 					{
-						if (!buyOrdersMap.empty())
+						while (!buyOrders.empty() && incomingPacket.quantity > 0
+							&& incomingPacket.price <= buyOrders.back().price)
 						{
 							// compare against highest bid/buy
 							// lowest price
-							if (incomingPacket.price <= buyOrdersMap.begin()->first) // priceMap->ordersList
+							uint64_t subQuantity = min(buyOrders.back().quantity, incomingPacket.quantity);
+
+							buyOrders.back().quantity -= subQuantity;
+							incomingPacket.quantity -= subQuantity;
+							totalTrades++;
+
+							if (buyOrders.back().quantity == 0)
 							{
 								// lowest price at oldest order
-								buyOrdersMap.begin()->second.pop_front();
-								totalTrades++;
-
-								// cleanup
-								if (buyOrdersMap.begin()->second.empty())
-								{
-									buyOrdersMap.erase(buyOrdersMap.begin());
-								}
-							}
-							else
-							{
-								// store incoming packet to buyOrdersMap
-								sellOrdersMap[incomingPacket.price].push_back(incomingPacket);
+								buyOrders.pop_back();
 							}
 						}
-						else
+
+						if (incomingPacket.quantity > 0)
 						{
-							// store incoming packet to buyOrdersMap
-							sellOrdersMap[incomingPacket.price].push_back(incomingPacket);
+							// store incoming packet to sellOrders
+							auto it = lower_bound(sellOrders.begin(), sellOrders.end(), incomingPacket,
+								[](const Order& a, const Order& b) {
+									if (a.price != b.price) return a.price > b.price;
+									return a.timestamp > b.timestamp; // oldest timestamp stays at back
+								});
+							sellOrders.insert(it, incomingPacket);
 						}
 					}
 					else // market type
 					{
-						if (!buyOrdersMap.empty())
+						if (!buyOrders.empty())
 						{
-							// lowest price at oldest order
-							buyOrdersMap.begin()->second.pop_front();
-							totalTrades++;
-
-							// cleanup
-							if (buyOrdersMap.begin()->second.empty())
+							while (!buyOrders.empty() && incomingPacket.quantity > 0)
 							{
-								buyOrdersMap.erase(buyOrdersMap.begin());
+								// lowest price at oldest order
+								uint64_t subQuantity = min(buyOrders.back().quantity, incomingPacket.quantity);
+
+								buyOrders.back().quantity -= subQuantity;
+								incomingPacket.quantity -= subQuantity;
+								totalTrades++;
+
+								if (buyOrders.back().quantity == 0)
+								{
+									buyOrders.pop_back();
+								}
 							}
 						}
 						else
@@ -283,6 +279,9 @@ int main()
 	cin.get();
 
 	startTime = chrono::high_resolution_clock::now();
+
+	buyOrders.reserve(1000000);
+	sellOrders.reserve(1000000);
 
 	// create thread for reciever
 	thread reciever(DataReceiver);

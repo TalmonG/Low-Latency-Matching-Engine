@@ -1,7 +1,7 @@
 ﻿  main.cpp
-C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(71,18): warning C4244: 'initializing': conversion from 'double' to 'uint64_t', possible loss of data
-C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(75,29): warning C4838: conversion from 'int' to 'uint64_t' requires a narrowing conversion
-C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(75,56): warning C4838: conversion from 'uint64_t' to 'uint32_t' requires a narrowing conversion
-C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(75,56): warning C4244: 'initializing': conversion from 'uint64_t' to 'uint32_t', possible loss of data
-C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(257,17): warning C4244: 'initializing': conversion from 'double' to 'int', possible loss of data
+C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(73,18): warning C4244: 'initializing': conversion from 'double' to 'uint64_t', possible loss of data
+C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(77,29): warning C4838: conversion from 'int' to 'uint64_t' requires a narrowing conversion
+C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(77,56): warning C4838: conversion from 'uint64_t' to 'uint32_t' requires a narrowing conversion
+C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(77,56): warning C4244: 'initializing': conversion from 'uint64_t' to 'uint32_t', possible loss of data
+C:\Users\Talmon\Desktop\low-latency-matching-engine\low-latency-matching-engine\src\main.cpp(254,17): warning C4244: 'initializing': conversion from 'double' to 'int', possible loss of data
   low-latency-matching-engine.vcxproj -> C:\Users\Talmon\Desktop\low-latency-matching-engine\x64\Debug\low-latency-matching-engine.exe
